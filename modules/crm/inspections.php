@@ -1,0 +1,19 @@
+<?php
+$title = 'Inspections';
+$subtitle = 'Move-in, move-out, routine and pre-sale condition reports — poor items can raise tickets automatically';
+$rows = all("SELECT i.*, u.unit_no, pr.name AS property, CONCAT(su.first_name, ' ', COALESCE(su.last_name,'')) AS inspector FROM crm_inspections i JOIN prpt_units u ON u.id = i.unit_id JOIN prpt_properties pr ON pr.id = u.property_id LEFT JOIN sys_users su ON su.id = i.inspector_id WHERE " . scope_sql('u.property_id') . " ORDER BY i.inspected_on DESC LIMIT 200");
+$actions = '<button class="vk-btn-accent" data-modal-open="#m-insp"><i class="fa-solid fa-clipboard-check"></i>New inspection</button>';
+?>
+<div class="vk-panel overflow-hidden"><div class="overflow-x-auto"><table class="vk-table"><thead><tr><th>Unit</th><th>Type</th><th>Date</th><th>Overall</th><th class="num">Damages</th><th>Inspector</th><th>Items</th></tr></thead><tbody>
+<?php foreach ($rows as $r): $items = json_decode((string)$r['checklist'], true) ?: []; ?><tr><td><b><?= e($r['unit_no']) ?></b><span class="block text-xs text-muted"><?= e($r['property']) ?></span></td><td><?= e(ucwords(str_replace('_', ' ', $r['inspection_type']))) ?></td><td><?= fdate($r['inspected_on']) ?></td>
+  <td><?= pill($r['overall'] === 'poor' ? 'overdue' : ($r['overall'] === 'fair' ? 'pending' : 'active'), ucfirst($r['overall'])) ?></td><td class="num"><?= $r['damages_cost'] ? money($r['damages_cost'], false) : '—' ?></td><td class="text-sm"><?= e($r['inspector']) ?></td>
+  <td class="text-xs"><?php foreach ($items as $it) echo '<span class="inline-block mr-1 mb-1 rounded-md px-1.5 py-0.5 ' . (in_array($it['condition'], ['poor', 'damaged'], true) ? 'bg-rose-500/10 text-rose-700' : 'bg-surface2') . '">' . e($it['area']) . ': ' . e($it['condition']) . '</span>'; ?><?= $r['notes'] ? '<span class="block text-muted">' . e(excerpt($r['notes'], 80)) . '</span>' : '' ?></td></tr><?php endforeach; ?>
+<?php if (!$rows) echo '<tr><td colspan="7">' . ui_empty('fa-clipboard-check', 'No inspections yet') . '</td></tr>'; ?>
+</tbody></table></div></div>
+<?php
+$areas = ['Living room', 'Kitchen', 'Bedroom 1', 'Bedroom 2', 'Bathroom', 'Walls & paint', 'Floors', 'Doors & locks', 'Windows', 'Electricals', 'Plumbing', 'Fixtures & fittings'];
+$rowsHtml = ''; foreach ($areas as $i => $a) $rowsHtml .= '<tr><td><input name="items[' . $i . '][area]" value="' . e($a) . '" class="vk-input !py-1.5"></td><td><select name="items[' . $i . '][condition]" class="vk-select !py-1.5"><option value="good">Good</option><option value="excellent">Excellent</option><option value="fair">Fair</option><option value="poor">Poor</option><option value="damaged">Damaged</option><option value="na">N/A</option></select></td><td><input name="items[' . $i . '][note]" class="vk-input !py-1.5" placeholder="note"></td></tr>';
+echo ui_modal('m-insp', 'Inspection', '<div class="grid grid-cols-1 sm:grid-cols-4 gap-4">' . ui_field('Unit *', ui_unit_picker('unit_id', null, 'required'), 'sm:col-span-2') . ui_field('Type', ui_select('inspection_type', ui_kv_options(['move_in' => 'Move-in', 'move_out' => 'Move-out', 'routine' => 'Routine', 'pre_sale' => 'Pre-sale']))) . ui_field('Date', ui_input('inspected_on', date('Y-m-d'), 'date')) . '</div>'
+  . '<table class="vk-table"><thead><tr><th>Area</th><th class="w-36">Condition</th><th>Note</th></tr></thead><tbody>' . $rowsHtml . '</tbody></table>'
+  . '<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">' . ui_field('Overall', ui_select('overall', ui_kv_options(['good' => 'Good', 'excellent' => 'Excellent', 'fair' => 'Fair', 'poor' => 'Poor']))) . ui_field('Damages cost (KSh)', ui_input('damages_cost', '', 'number')) . ui_field('Notes', ui_input('notes')) . '</div>'
+  . '<label class="vk-switch"><input type="checkbox" name="raise_tickets" value="1" checked>Raise maintenance tickets for poor / damaged items</label>', url('api.php', ['r' => 'crm/save-inspection']), 'Save inspection', 'max-w-3xl', 'fa-clipboard-check');

@@ -1,0 +1,50 @@
+<?php
+$title = 'Deals & commission';
+$subtitle = 'Unit sales — revenue split between the owner and agency commission, shared across agents';
+$id = (int)($_GET['id'] ?? 0);
+$st = (string)($_GET['status'] ?? '');
+$rows = all("SELECT d.*, l.full_name, l.lead_no, u.unit_no, pr.name AS property, o.display_name AS owner FROM sls_deals d JOIN sls_leads l ON l.id = d.lead_id JOIN prpt_units u ON u.id = d.unit_id JOIN prpt_properties pr ON pr.id = u.property_id LEFT JOIN prpt_parties o ON o.id = d.owner_party_id" . ($st ? " WHERE d.status = " . db()->quote($st) : '') . " ORDER BY d.created_at DESC LIMIT 300");
+$k = one("SELECT COALESCE(SUM(CASE WHEN status = 'completed' THEN agreed_price END),0) sold, COALESCE(SUM(CASE WHEN status = 'completed' THEN commission_amount END),0) comm, COALESCE(SUM(CASE WHEN status NOT IN ('completed','cancelled') THEN agreed_price END),0) open, COUNT(*) n FROM sls_deals");
+$pend = (float)val("SELECT COALESCE(SUM(amount),0) FROM sls_commission_splits WHERE status IN ('pending','approved')");
+$deal = $id ? one("SELECT d.*, l.full_name, l.party_id AS lead_party, u.unit_no, pr.name AS property, o.display_name AS owner FROM sls_deals d JOIN sls_leads l ON l.id = d.lead_id JOIN prpt_units u ON u.id = d.unit_id JOIN prpt_properties pr ON pr.id = u.property_id LEFT JOIN prpt_parties o ON o.id = d.owner_party_id WHERE d.id = ?", [$id]) : null;
+?>
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5"><?= ui_stat('fa-house-circle-check', 'Sold (completed)', money($k['sold'], true, true), 'green') ?><?= ui_stat('fa-percent', 'Commission earned', money($k['comm'], true, true), 'accent') ?><?= ui_stat('fa-hourglass-half', 'Open deal value', money($k['open'], true, true), 'blue') ?><?= ui_stat('fa-user-tie', 'Agent commission unpaid', money($pend, true, true), 'violet') ?></div>
+<?php if ($deal): $splits = all("SELECT s.*, CONCAT(u.first_name, ' ', COALESCE(u.last_name,'')) AS staff, p.display_name AS ext FROM sls_commission_splits s LEFT JOIN sys_users u ON u.id = s.user_id LEFT JOIN prpt_parties p ON p.id = s.party_id WHERE s.deal_id = ?", [$deal['id']]);
+  $paid = (float)val("SELECT COALESCE(SUM(amount_paid),0) FROM bln_invoices WHERE deal_id = ? AND status <> 'void'", [$deal['id']]); $ownerNet = (float)$deal['agreed_price'] - (float)$deal['commission_amount']; ?>
+<div class="vk-panel p-6 mb-6">
+  <div class="flex flex-wrap items-start gap-4"><div><p class="text-xs text-muted"><?= e($deal['deal_no']) ?></p><h2 class="text-xl font-extrabold">Unit <?= e($deal['unit_no']) ?> · <?= e($deal['property']) ?></h2><p class="text-sm text-muted">Buyer <b><?= e($deal['full_name']) ?></b> · Seller <b><?= e($deal['owner'] ?: '—') ?></b></p></div>
+    <div class="ml-auto flex gap-2"><?= pill($deal['status']) ?><a class="vk-btn-ghost !py-1.5 text-xs" href="<?= e(page('sales/lead', ['id' => $deal['lead_id']])) ?>">Lead</a>
+      <?php if (can('billing.invoices.create') && !in_array($deal['status'], ['completed', 'cancelled'], true)): ?><button class="vk-btn-ghost !py-1.5 text-xs" data-action="<?= e(url('api.php', ['r' => 'sales/invoice-deal', 'id' => $deal['id']])) ?>" data-prompt="Amount to invoice the buyer" data-prompt-type="number" data-prompt-name="amount" data-prompt-value="<?= (float)($deal['deposit_amount'] ?: $deal['agreed_price']) ?>"><i class="fa-solid fa-file-invoice"></i>Invoice buyer</button><?php endif; ?></div></div>
+  <div class="mt-5 grid grid-cols-1 sm:grid-cols-4 gap-3">
+    <div class="rounded-xl bg-surface2/60 p-3"><p class="text-xs text-muted">Agreed price</p><b class="text-lg"><?= money($deal['agreed_price']) ?></b></div>
+    <div class="rounded-xl bg-surface2/60 p-3"><p class="text-xs text-muted">Collected from buyer</p><b class="text-lg text-emerald-600"><?= money($paid) ?></b></div>
+    <div class="rounded-xl bg-accent/10 p-3"><p class="text-xs text-muted">Agency commission (<?= $deal['commission_type'] === 'percentage' ? num($deal['commission_value'], 2) . '%' : 'fixed' ?>)</p><b class="text-lg"><?= money($deal['commission_amount']) ?></b></div>
+    <div class="rounded-xl bg-violet-500/10 p-3"><p class="text-xs text-muted">Owner proceeds</p><b class="text-lg"><?= money($ownerNet) ?></b></div>
+  </div>
+  <div class="mt-3 h-3 rounded-full overflow-hidden flex bg-surface2"><span class="bg-violet-500" style="width:<?= (float)$deal['agreed_price'] > 0 ? $ownerNet / $deal['agreed_price'] * 100 : 0 ?>%"></span><span class="bg-accent" style="width:<?= (float)$deal['agreed_price'] > 0 ? $deal['commission_amount'] / $deal['agreed_price'] * 100 : 0 ?>%"></span></div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+    <form data-ajax="<?= e(url('api.php', ['r' => 'sales/update-deal'])) ?>" class="space-y-3"><input type="hidden" name="id" value="<?= $deal['id'] ?>">
+      <h3 class="font-bold">Progress</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <?= ui_field('Status', ui_select('status', ui_kv_options(['offer' => 'Offer', 'reserved' => 'Reserved', 'agreement_signed' => 'Agreement signed', 'paying' => 'Paying', 'completed' => 'Completed — transfer ownership', 'cancelled' => 'Cancelled'], $deal['status']))) ?>
+        <?= ui_field('Agreed price', ui_input('agreed_price', $deal['agreed_price'], 'number', 'step="any"')) ?>
+        <?= ui_field('Deposit', ui_input('deposit_amount', $deal['deposit_amount'], 'number', 'step="any"')) ?><?= ui_field('Payment plan', ui_select('payment_plan', ui_kv_options(['cash' => 'Cash', 'installments' => 'Instalments', 'mortgage' => 'Mortgage'], $deal['payment_plan']))) ?>
+        <?= ui_field('Commission type', ui_select('commission_type', ui_kv_options(['percentage' => '%', 'fixed' => 'Fixed'], $deal['commission_type']))) ?><?= ui_field('Commission value', ui_input('commission_value', $deal['commission_value'], 'number', 'step="any"')) ?>
+        <?= ui_field('Expected close', ui_input('expected_close_date', $deal['expected_close_date'], 'date')) ?><?= ui_field('Instalments', ui_input('installments', $deal['installments'], 'number')) ?>
+      </div><?php if ($deal['status'] !== 'completed'): ?><button class="vk-btn-accent !py-2"><i class="fa-solid fa-floppy-disk"></i>Save</button><?php endif; ?></form>
+    <div><div class="flex items-center mb-2"><h3 class="font-bold">Commission split</h3><?php if ($deal['status'] !== 'cancelled'): ?><button class="ml-auto vk-btn-ghost !py-1.5 text-xs" data-crud-new="#m-split" data-title="Add split"><i class="fa-solid fa-plus"></i>Add</button><?php endif; ?></div>
+      <table class="vk-table"><tbody><?php foreach ($splits as $s): ?><tr><td><b><?= e($s['staff'] ?: $s['ext']) ?></b><span class="block text-xs text-muted"><?= $s['staff'] ? 'Staff' : 'External agent' ?> · <?= num($s['share_pct'], 1) ?>%</span></td><td class="num font-bold"><?= money($s['amount'], false) ?></td><td><?= pill($s['status']) ?></td>
+        <td class="text-right whitespace-nowrap"><?php if (can('sales.commissions.approve')): ?><?php if ($s['status'] === 'pending'): ?><button class="vk-btn-ghost !py-1 text-xs" data-action="<?= e(url('api.php', ['r' => 'sales/split-status'])) ?>" data-payload='{"id":<?= $s['id'] ?>,"status":"approved"}'>Approve</button><?php elseif ($s['status'] === 'approved'): ?><button class="vk-btn-ghost !py-1 text-xs" data-action="<?= e(url('api.php', ['r' => 'sales/split-status'])) ?>" data-payload='{"id":<?= $s['id'] ?>,"status":"paid"}' data-confirm="Mark commission paid?">Paid</button><?php endif; endif; ?>
+          <?php if ($s['status'] === 'pending'): ?><button class="vk-icon-btn !h-7 !w-7" data-action="<?= e(url('api.php', ['r' => 'sales/delete-split', 'id' => $s['id']])) ?>" data-confirm="Remove?"><i class="fa-solid fa-xmark text-xs"></i></button><?php endif; ?></td></tr><?php endforeach; ?></tbody></table>
+      <?php $tot = array_sum(array_column($splits, 'share_pct')); if ($tot < 99.99) echo '<p class="text-xs text-muted mt-2">' . num(100 - $tot, 1) . '% (' . money((float)$deal['commission_amount'] * (100 - $tot) / 100) . ') unassigned — retained by the agency.</p>'; ?></div>
+  </div>
+</div>
+<?= ui_modal('m-split', 'Commission split', '<input type="hidden" name="id"><input type="hidden" name="deal_id" value="' . $deal['id'] . '"><div class="grid grid-cols-1 sm:grid-cols-2 gap-4">' . ui_field('Staff member', ui_select('user_id', ui_options(staff_for_select(), 'id', 'name', null, '—'))) . ui_field('…or external agent', ui_party_picker('party_id')) . ui_field('Share of commission %', ui_input('share_pct', 50, 'number', 'step="0.1"')) . '</div>', url('api.php', ['r' => 'sales/save-split']), 'Save', 'max-w-xl', 'fa-percent') ?>
+<?php endif; ?>
+<div class="flex flex-wrap gap-2 mb-4"><?php foreach (['' => 'All', 'offer' => 'Offer', 'reserved' => 'Reserved', 'agreement_signed' => 'Signed', 'paying' => 'Paying', 'completed' => 'Completed', 'cancelled' => 'Cancelled'] as $kk => $lb): ?><a class="vk-chip <?= $st === $kk ? '!border-accent !bg-accent/10' : '' ?>" href="<?= e(page('sales/deals', ['status' => $kk])) ?>"><?= $lb ?></a><?php endforeach; ?></div>
+<div class="vk-panel overflow-hidden"><div class="overflow-x-auto"><table class="vk-table">
+  <thead><tr><th>Deal</th><th>Unit</th><th>Buyer</th><th>Seller</th><th class="num">Price</th><th class="num">Commission</th><th>Status</th><th>Expected close</th></tr></thead><tbody>
+  <?php foreach ($rows as $d): ?><tr data-href="<?= e(page('sales/deals', ['id' => $d['id']])) ?>" class="<?= $id === (int)$d['id'] ? 'bg-accent/5' : '' ?>"><td><b><?= e($d['deal_no']) ?></b></td><td><?= e($d['unit_no']) ?><span class="block text-xs text-muted"><?= e($d['property']) ?></span></td><td><?= e($d['full_name']) ?></td><td class="text-sm"><?= e($d['owner'] ?: '—') ?></td>
+    <td class="num font-bold"><?= money($d['agreed_price'], false) ?></td><td class="num"><?= money($d['commission_amount'], false) ?></td><td><?= pill($d['status']) ?></td><td class="text-xs"><?= fdate($d['expected_close_date']) ?></td></tr><?php endforeach; ?>
+  <?php if (!$rows) echo '<tr><td colspan="8">' . ui_empty('fa-handshake', 'No deals yet', 'Create one from a lead.') . '</td></tr>'; ?>
+  </tbody></table></div></div>
