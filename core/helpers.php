@@ -8,9 +8,20 @@ function root_path(): string {
     static $bp = null;
     if ($bp !== null) return $bp;
     if (($cfg = config('app.base_path')) !== null) return $bp = rtrim($cfg, '/');
-    $doc = realpath($_SERVER['DOCUMENT_ROOT'] ?? '') ?: '';
-    $root = realpath(VK_ROOT) ?: VK_ROOT;
-    return $bp = rtrim(($doc && str_starts_with($root, $doc)) ? str_replace('\\', '/', substr($root, strlen($doc))) : '', '/');
+    $root = str_replace('\\', '/', realpath(VK_ROOT) ?: VK_ROOT);
+    // 1) from the request: SCRIPT_NAME minus the script's path inside the app (works with sub-folders, Alias and symlinks)
+    $sn = str_replace('\\', '/', (string)($_SERVER['SCRIPT_NAME'] ?? ''));
+    $sf = str_replace('\\', '/', (string)(realpath($_SERVER['SCRIPT_FILENAME'] ?? '') ?: ''));
+    if (PHP_SAPI !== 'cli' && $sn !== '' && $sf !== '' && str_starts_with($sf, $root . '/')) {
+        $rel = substr($sf, strlen($root));                       // e.g. /index.php or /webhooks/mpesa.php
+        if (str_ends_with($sn, $rel)) return $bp = rtrim(substr($sn, 0, -strlen($rel)), '/');
+    }
+    // 2) CLI (cron) or unusual servers: the path of the configured app URL
+    $u = (string)config(defined('VK_APP') && VK_APP === 'portal' ? 'app.portal_url' : 'app.pms_url');
+    if (PHP_SAPI === 'cli' && $u !== '') return $bp = rtrim((string)parse_url($u, PHP_URL_PATH), '/');
+    // 3) last resort: compare with the document root
+    $doc = str_replace('\\', '/', realpath($_SERVER['DOCUMENT_ROOT'] ?? '') ?: '');
+    return $bp = rtrim(($doc && str_starts_with($root, $doc)) ? substr($root, strlen($doc)) : '', '/');
 }
 function url(string $path = '', array $query = []): string {
     $query = array_filter($query, fn($v) => $v !== null && $v !== '' && $v !== []);

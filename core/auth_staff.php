@@ -29,7 +29,7 @@ function can(string $perm): bool {
 function require_staff(): array {
     $u = staff(); if ($u) return $u;
     if (is_ajax() || str_contains($_SERVER['SCRIPT_NAME'] ?? '', 'api')) json_fail('Your session has ended. Please sign in again.', 401);
-    $_SESSION['intended'] = $_SERVER['REQUEST_URI'] ?? ''; redirect(url('admin/login.php'));
+    $_SESSION['intended'] = $_SERVER['REQUEST_URI'] ?? ''; redirect(url('login.php'));
 }
 function require_perm(string $perm): void {
     require_staff();
